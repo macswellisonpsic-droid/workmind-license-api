@@ -9,129 +9,106 @@ function setCors(res) {
 
 function getBody(req) {
   if (typeof req.body === 'object' && req.body !== null) return req.body;
-  if (typeof req.body === 'string') return JSON.parse(req.body || '{}');
+
+  if (typeof req.body === 'string') {
+    try {
+      return JSON.parse(req.body || '{}');
+    } catch {
+      return {};
+    }
+  }
+
   return {};
 }
 
-function getPaymentId(req, body) {
-  return (
-    body?.data?.id ||
-    body?.id ||
-    req.query?.['data.id'] ||
-    req.query?.id ||
-    req.query?.payment_id ||
-    req.query?.collection_id ||
-    ''
-  );
-}
-
-function getTopic(req, body) {
-  return body?.type || body?.topic || req.query?.type || req.query?.topic || '';
-}
-
-function formatDateBR(date) {
-  return new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  }).format(date);
-}
-
 function normalizeMetadata(payment) {
-  const metadata = payment?.metadata || {};
+  const metadata = payment.metadata || {};
 
   return {
-    orderId: metadata.order_id || payment?.external_reference || '',
-    customerName:
-      metadata.customer_name ||
-      metadata.nome ||
-      metadata.name ||
-      payment?.payer?.first_name ||
-      'Cliente',
-    email:
-      metadata.email ||
-      metadata.customer_email ||
-      payment?.payer?.email ||
-      '',
-    whatsapp: metadata.whatsapp || metadata.phone || '',
-    hwid: metadata.hwid || metadata.machine_id || metadata.hardware_id || '',
-    planId: metadata.plan_id || metadata.plan || '',
-    planName: metadata.plan_name || metadata.plan_label || 'WorkMind PSI',
-    planType: metadata.plan_type || metadata.type || 'LICENCA',
-    days: Number(metadata.plan_days || metadata.days || metadata.validity_days || 0),
-    coupon: metadata.coupon_code || metadata.coupon || metadata.cupom || '',
+    nome: metadata.nome || metadata.customer_name || payment.payer?.first_name || 'Cliente',
+    email: metadata.email || metadata.customer_email || payment.payer?.email || '',
+    whatsapp: metadata.whatsapp || '',
+    hwid: metadata.hwid || '',
+    planId: metadata.plan_id || '',
+    planName: metadata.plan_name || 'WorkMind PSI',
+    planType: metadata.plan_type || 'LICENCA',
+    planDays: Number(metadata.plan_days || metadata.days || 0),
+    couponCode: metadata.coupon_code || '',
+    couponApplied: Boolean(metadata.coupon_applied)
   };
 }
 
-async function getMercadoPagoPayment(paymentId) {
-  if (!process.env.MP_ACCESS_TOKEN) {
-    throw new Error('MP_ACCESS_TOKEN não configurado na Vercel.');
-  }
-
-  const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`,
-    },
-  });
+async function consultMercadoPagoPayment(paymentId) {
+  const response = await fetch(
+    `https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`
+      }
+    }
+  );
 
   const data = await response.json();
 
-  if (!response.ok) {
-    throw new Error(`Não foi possível consultar o pagamento no Mercado Pago: ${JSON.stringify(data)}`);
-  }
-
-  return data;
+  return {
+    ok: response.ok,
+    status: response.status,
+    data
+  };
 }
 
 module.exports = async function handler(req, res) {
   setCors(res);
 
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
 
   if (req.method === 'GET') {
     return res.status(200).json({
       success: true,
       route: 'webhook',
-      message: 'Webhook WorkMind PSI ativo. Use POST para notificações do Mercado Pago.',
+      message: 'Webhook WorkMind PSI ativo. Use POST para notificações do Mercado Pago.'
     });
   }
 
   if (req.method !== 'POST') {
     return res.status(405).json({
       success: false,
-      error: 'Método não permitido.',
+      error: 'Método não permitido.'
     });
   }
 
   try {
     const token = String(req.query.token || '');
 
-    if (process.env.WEBHOOK_TOKEN && token !== process.env.WEBHOOK_TOKEN) {
+    if (!process.env.WEBHOOK_TOKEN || token !== process.env.WEBHOOK_TOKEN) {
       return res.status(401).json({
         success: false,
-        error: 'Webhook não autorizado.',
+        error: 'Webhook não autorizado.'
       });
     }
 
     const body = getBody(req);
-    const topic = getTopic(req, body);
-    const paymentId = String(getPaymentId(req, body));
+
+    const eventType = body.type || body.topic || '';
+    const action = body.action || '';
+    const paymentId = body?.data?.id || body.id || req.query.id || '';
 
     console.log('[WEBHOOK] Recebido:', {
-      topic,
+      eventType,
+      action,
       paymentId,
-      query: req.query,
-      body,
+      liveMode: body.live_mode,
+      body
     });
 
-    if (topic && topic !== 'payment') {
+    if (eventType && eventType !== 'payment') {
       return res.status(200).json({
         success: true,
         ignored: true,
-        reason: 'Evento ignorado porque não é payment.',
-        topic,
+        reason: 'Evento ignorado porque não é pagamento.'
       });
     }
 
@@ -139,87 +116,106 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({
         success: true,
         ignored: true,
-        reason: 'Webhook recebido sem paymentId.',
+        reason: 'Notificação sem paymentId.'
       });
     }
 
-    const payment = await getMercadoPagoPayment(paymentId);
+    if (String(paymentId) === '123456' || body.live_mode === false) {
+      return res.status(200).json({
+        success: true,
+        simulated: true,
+        message: 'Simulação do Mercado Pago recebida com sucesso.',
+        paymentId
+      });
+    }
+
+    if (!process.env.MP_ACCESS_TOKEN) {
+      throw new Error('MP_ACCESS_TOKEN não configurado na Vercel.');
+    }
+
+    const paymentResult = await consultMercadoPagoPayment(paymentId);
 
     console.log('[WEBHOOK] Pagamento consultado:', {
-      id: payment.id,
-      status: payment.status,
-      status_detail: payment.status_detail,
-      external_reference: payment.external_reference,
-      metadata: payment.metadata,
+      ok: paymentResult.ok,
+      status: paymentResult.status,
+      paymentStatus: paymentResult.data?.status,
+      paymentId
     });
+
+    if (!paymentResult.ok) {
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: 'Não foi possível consultar o pagamento. O Mercado Pago pode reenviar depois.',
+        paymentId,
+        mercadoPagoStatus: paymentResult.status
+      });
+    }
+
+    const payment = paymentResult.data;
 
     if (payment.status !== 'approved') {
       return res.status(200).json({
         success: true,
         ignored: true,
-        paymentId: payment.id,
-        status: payment.status,
         reason: 'Pagamento ainda não aprovado.',
+        paymentId,
+        status: payment.status
       });
     }
 
     const data = normalizeMetadata(payment);
 
-    if (!data.email) {
-      throw new Error('Pagamento aprovado, mas sem e-mail na metadata ou no payer.');
+    if (!data.email || !data.email.includes('@')) {
+      throw new Error('Pagamento aprovado, mas sem e-mail válido.');
     }
 
-    if (!data.hwid) {
-      throw new Error('Pagamento aprovado, mas sem HWID na metadata.');
+    if (!data.hwid || data.hwid.length < 3) {
+      throw new Error('Pagamento aprovado, mas sem HWID válido.');
     }
 
-    if (!data.days || data.days <= 0) {
-      throw new Error('Pagamento aprovado, mas sem validade da licença na metadata.');
+    if (!data.planDays || data.planDays <= 0) {
+      throw new Error('Pagamento aprovado, mas sem validade do plano.');
     }
 
     const generated = generateLicense({
       hwid: data.hwid,
       email: data.email,
-      days: data.days,
-      type: data.planType,
-      paymentId: String(payment.id),
-      orderId: data.orderId,
-      planId: data.planId,
+      days: data.planDays,
+      type: data.planType
     });
 
     await sendLicenseEmail({
       to: data.email,
-      customerName: data.customerName,
+      customerName: data.nome,
       planName: data.planName,
       hwid: data.hwid,
       license: generated.license,
-      expiresAt: formatDateBR(new Date(generated.expire)),
-      paymentId: String(payment.id),
-      orderId: data.orderId,
+      expiresAt: generated.expire,
+      paymentId: String(payment.id)
     });
 
     console.log('[WEBHOOK] Licença enviada com sucesso:', {
       paymentId: payment.id,
       email: data.email,
       hwid: data.hwid,
-      planId: data.planId,
-      expire: generated.expire,
+      planName: data.planName,
+      expire: generated.expire
     });
 
     return res.status(200).json({
       success: true,
       sent: true,
       paymentId: payment.id,
-      status: payment.status,
       email: data.email,
-      expire: generated.expire,
+      expire: generated.expire
     });
   } catch (err) {
     console.error('[WEBHOOK] Erro:', err);
 
     return res.status(500).json({
       success: false,
-      error: err.message || String(err),
+      error: err.message || String(err)
     });
   }
 };
