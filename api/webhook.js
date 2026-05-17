@@ -38,6 +38,16 @@ function formatDateBR(date) {
   }).format(date);
 }
 
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + Number(days || 0));
+  return result;
+}
+
+function getStableIssueDate(payment) {
+  return new Date(payment.date_approved || payment.date_last_updated || payment.date_created || Date.now());
+}
+
 function normalizeMetadata(payment) {
   const metadata = payment?.metadata || {};
 
@@ -211,12 +221,19 @@ module.exports = async function handler(req, res) {
       throw new Error('Pagamento aprovado, mas sem validade da licença na metadata.');
     }
 
+    const issueDate = getStableIssueDate(payment);
+    const expireDate = addDays(issueDate, data.days);
+    const paymentIdForLicense = String(payment.id);
+    const emailIdempotencyKey = `workmind-license-payment-${paymentIdForLicense}`;
+
     const generated = generateLicense({
       hwid: data.hwid,
       email: data.email,
       days: data.days,
       type: data.planType,
-      paymentId: String(payment.id),
+      expireAt: expireDate.toISOString(),
+      issuedAt: issueDate.toISOString(),
+      paymentId: paymentIdForLicense,
       orderId: data.orderId,
       planId: data.planId,
     });
@@ -229,8 +246,9 @@ module.exports = async function handler(req, res) {
       hwid: data.hwid,
       license: generated.license,
       expiresAt: formatDateBR(new Date(generated.expire)),
-      paymentId: String(payment.id),
+      paymentId: paymentIdForLicense,
       orderId: data.orderId,
+      idempotencyKey: emailIdempotencyKey,
     });
 
     console.log('[WEBHOOK] Licença enviada com sucesso:', {
