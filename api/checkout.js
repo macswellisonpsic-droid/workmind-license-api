@@ -136,7 +136,7 @@ module.exports = async function handler(req, res) {
 
       back_urls: {
         success: `${siteUrl}/licenca-sucesso.html`,
-        pending: `${siteUrl}/licenca-pendente.html`,
+        pending: `${siteUrl}/licenca-sucesso.html`,
         failure: `${siteUrl}/licenca-erro.html`,
       },
 
