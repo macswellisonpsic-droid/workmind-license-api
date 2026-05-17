@@ -1,5 +1,12 @@
 {
   "name": "workmind-license-api",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "resend": "^4.0.0"
+  }
 }
